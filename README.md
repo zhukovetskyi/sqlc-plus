@@ -41,6 +41,10 @@ WHERE users.id = $1 AND users.status = $2;
 
 ## Development
 
+To contribute to the project:
+
+1. Install the **Extension Test Runner** by Microsoft from the VS Code Marketplace to run and debug tests visually.
+2. Setup environment:
 ```bash
 npm install -g yo generator-code vsce
 yo code   # scaffold (already structured for TypeScript)
