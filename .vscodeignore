@@ -1,6 +1,9 @@
 .vscode/**
 .vscode-test/**
+.opencode/**
+.github/**
 src/**
+out/test/**
 .gitignore
 .yarnrc
 vsc-extension-quickstart.md
@@ -9,3 +12,5 @@ vsc-extension-quickstart.md
 **/*.map
 **/*.ts
 **/.vscode-test.*
+.prettierrc
+.prettierignore
