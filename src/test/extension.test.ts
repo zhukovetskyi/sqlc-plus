@@ -20,7 +20,7 @@ const EXPECTED = [
 ].join('\n');
 
 const CTE_EXPECTED =
-  "WITH params AS (SELECT '111' AS id, 'John Doe' AS name) SELECT u.* FROM users u, params p WHERE u.id = p.id OR u.username = p.name;";
+  "WITH params AS (SELECT '111' AS id, 'John Doe' AS name) SELECT u.* FROM users u WHERE u.id = (SELECT id FROM params) OR u.username = (SELECT name FROM params);";
 
 suite('extension', function () {
   this.timeout(20000);

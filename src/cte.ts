@@ -9,9 +9,6 @@ import {
 /** The name of the CTE that holds the values of the parameters. */
 export const CTE_NAME = 'params';
 
-/** The alias of the CTE in the FROM clause. */
-const CTE_ALIAS = 'p';
-
 export interface CteOptions extends TransformOptions {
   /** The value of each parameter, by parameter name. Each value is a SQL literal. */
   readonly values?: Record<string, string>;
@@ -26,7 +23,8 @@ export interface CteResult extends TransformResult {
  * The keywords of PostgreSQL that need a quoted identifier.
  *
  * The list is the list of the reserved words of PostgreSQL, the same list that
- * sqlc uses to quote an identifier.
+ * sqlc uses to quote an identifier. The list is a close match for the reserved
+ * words of SQLite and MySQL, so one list stands for every dialect.
  */
 const RESERVED_WORDS = new Set([
   'all',
@@ -132,29 +130,9 @@ const RESERVED_WORDS = new Set([
 ]);
 
 /**
- * The keywords that end the FROM list of a statement.
+ * The keywords that a supported statement starts with.
  */
-const FROM_END_KEYWORDS = new Set([
-  'WHERE',
-  'GROUP',
-  'HAVING',
-  'WINDOW',
-  'ORDER',
-  'LIMIT',
-  'OFFSET',
-  'FETCH',
-  'FOR',
-  'UNION',
-  'INTERSECT',
-  'EXCEPT',
-  'RETURNING',
-]);
-
-/**
- * The keywords that join two statements. The alias of the CTE is not in scope
- * after them, so the name of the CTE is used instead.
- */
-const SET_OPERATION_KEYWORDS = new Set(['UNION', 'INTERSECT', 'EXCEPT']);
+const FIRST_KEYWORDS = new Set(['SELECT', 'WITH', 'INSERT', 'UPDATE', 'DELETE']);
 
 /**
  * The name of a parameter that needs no quotes.
@@ -166,7 +144,9 @@ const PLAIN_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
  * values of the parameters written in a CTE.
  *
  * The function replaces the sqlc syntax, writes the values of the parameters
- * in a CTE and uses the columns of the CTE in the query.
+ * in a CTE and uses a scalar subquery over the CTE in place of every
+ * placeholder. A subquery keeps the parameters out of the FROM list, so no
+ * column becomes ambiguous and no SELECT * grows columns of the CTE.
  */
 export function transformSqlcQueryWithValues(
   sql: string,
@@ -188,11 +168,17 @@ export function transformSqlcQueryWithValues(
     );
   }
 
-  const missing = named
+  const unique = uniqueByName(named);
+
+  const missing = unique
     .filter((parameter) => values[parameter.name] === undefined)
     .map((parameter) => parameter.name);
   if (missing.length > 0) {
     throw new Error(`The parameter ${missing.join(', ')} has no value.`);
+  }
+
+  if (transformed.statementCount > 1) {
+    throw new Error('The query has more than one statement.');
   }
 
   const statement = statementOf(transformed.sql, dialect);
@@ -202,25 +188,16 @@ export function transformSqlcQueryWithValues(
 
   const keywords = new Scanner(statement, dialect).keywords(0, statement.length);
   const first = keywords.length > 0 ? keywords[0].word : '';
-  if (first !== 'SELECT' && first !== 'WITH' && first !== 'INSERT') {
+  if (!FIRST_KEYWORDS.has(first)) {
     throw new Error(`The statement ${first} is not supported.`);
   }
 
-  const setOperation = keywords.find((keyword) => SET_OPERATION_KEYWORDS.has(keyword.word));
-  const hasSelect = keywords.some((keyword) => keyword.word === 'SELECT');
-  if (first === 'INSERT' && !hasSelect) {
-    throw new Error('The statement INSERT with a VALUES list is not supported.');
-  }
-
-  const aliased = setOperation === undefined;
-  const qualifier = aliased ? CTE_ALIAS : CTE_NAME;
-
-  const replaced = replacePlaceholders(statement, transformed.parameters, qualifier, dialect);
-  const withClause = buildWithClause(replaced, named, values, aliased, dialect);
-  const cte = `${CTE_NAME} AS (SELECT ${columnsOf(named, values)})`;
-  const parameters = named.map((parameter) => ({
+  const replaced = replacePlaceholders(statement, named, dialect);
+  const withClause = buildWithClause(replaced, unique, values, dialect);
+  const cte = `${CTE_NAME} AS (SELECT ${columnsOf(unique, values, dialect)})`;
+  const parameters = unique.map((parameter) => ({
     ...parameter,
-    placeholder: `${qualifier}.${quoteIdentifier(parameter.name)}`,
+    placeholder: referenceOf(parameter.name, dialect),
   }));
 
   return { sql: withClause, parameters, statementCount: transformed.statementCount, cte };
@@ -241,12 +218,22 @@ function statementOf(sql: string, dialect: Dialect): string | null {
 }
 
 /**
- * Replaces every placeholder of the statement with the column of the CTE.
+ * The SQL text that stands for a parameter at its position.
+ *
+ * A scalar subquery reads one column of the CTE, so the text needs no relation
+ * of its own in the FROM list.
+ */
+function referenceOf(name: string, dialect: Dialect): string {
+  return `(SELECT ${quoteIdentifier(name, dialect)} FROM ${CTE_NAME})`;
+}
+
+/**
+ * Replaces every placeholder of the statement with a scalar subquery over the
+ * CTE.
  */
 function replacePlaceholders(
   statement: string,
   parameters: TransformParameter[],
-  qualifier: string,
   dialect: Dialect
 ): string {
   const scanner = new Scanner(statement, dialect);
@@ -254,7 +241,7 @@ function replacePlaceholders(
 
   const references = new Map<string, string>();
   for (const parameter of parameters) {
-    references.set(parameter.placeholder, `${qualifier}.${quoteIdentifier(parameter.name)}`);
+    references.set(parameter.placeholder, referenceOf(parameter.name, dialect));
   }
 
   const result: string[] = [];
@@ -262,7 +249,7 @@ function replacePlaceholders(
   tokens.forEach((token, index) => {
     const reference =
       dialect.placeholderStyle === 'mysql'
-        ? `${qualifier}.${quoteIdentifier(parameters[index].name)}`
+        ? referenceOf(parameters[index].name, dialect)
         : references.get(token.ident);
     if (reference === undefined) {
       return;
@@ -276,121 +263,74 @@ function replacePlaceholders(
 
 /**
  * Builds the query with the CTE that holds the values.
+ *
+ * A statement that has a WITH clause keeps its own CTEs. The RECURSIVE
+ * modifier stays in front of every CTE, so it moves before the CTE of the
+ * values.
  */
 function buildWithClause(
   statement: string,
   parameters: TransformParameter[],
   values: Record<string, string>,
-  aliased: boolean,
   dialect: Dialect
 ): string {
-  const cte = `${CTE_NAME} AS (SELECT ${columnsOf(parameters, values)})`;
+  const cte = `${CTE_NAME} AS (SELECT ${columnsOf(parameters, values, dialect)})`;
 
   const scanner = new Scanner(statement, dialect);
   const keywords = scanner.keywords(0, statement.length);
   const withKeyword = keywords.find((keyword) => keyword.word === 'WITH');
 
   if (!withKeyword) {
-    const body = aliased ? addFromItem(statement, dialect) : statement;
-    return `WITH ${cte} ${body}`;
+    return `WITH ${cte} ${statement}`;
   }
 
   const rest = statement.slice(withKeyword.end);
-  const trimmed = rest.trimStart();
-  const offset = rest.length - trimmed.length;
-  const recursive = trimmed.startsWith('RECURSIVE');
-  const head = statement.slice(0, withKeyword.end) + (recursive ? ' RECURSIVE ' : ' ');
-  const body = statement.slice(withKeyword.end + offset);
-  const withFrom = aliased ? addFromItem(body, dialect) : body;
-  return `${head}${cte}, ${withFrom}`;
-}
-
-/**
- * Adds the CTE to the FROM list of the statement.
- *
- * A statement that has no FROM clause gets a FROM clause of its own.
- */
-function addFromItem(statement: string, dialect: Dialect): string {
-  const scanner = new Scanner(statement, dialect);
-  const keywords = scanner.keywords(0, statement.length);
-  const from = keywords.find((keyword) => keyword.word === 'FROM');
-  if (!from) {
-    const end = endOfStatement(statement);
-    const before = statement.slice(0, end).trimEnd();
-    const after = statement.slice(end);
-    return `${before} FROM ${CTE_NAME} ${CTE_ALIAS}${separator(after)}`;
+  const recursive = /^RECURSIVE(?![A-Za-z0-9_$])/i.test(rest.trimStart());
+  if (!recursive) {
+    return `WITH ${cte}, ${rest.trimStart()}`;
   }
 
-  const end = endOfList(keywords, from.end, statement);
-  const before = statement.slice(0, end).trimEnd();
-  const after = statement.slice(end);
-  return `${before}, ${CTE_NAME} ${CTE_ALIAS}${separator(after)}`;
+  const wordStart = withKeyword.end + (rest.length - rest.trimStart().length);
+  const body = statement.slice(scanner.identEnd(wordStart)).trimStart();
+  return `WITH RECURSIVE ${cte}, ${body}`;
 }
 
 /**
- * The space between the CTE and the text that follows it.
- *
- * A semicolon and a closing parenthesis follow the CTE without a space.
+ * The columns of the CTE, one for each distinct parameter.
  */
-function separator(text: string): string {
-  if (text === '') {
-    return '';
-  }
-  if (text.startsWith(';') || text.startsWith(')')) {
-    return text;
-  }
-  return text.startsWith(' ') || text.startsWith('\n') ? text : ` ${text}`;
-}
-
-/**
- * The offset of the semicolon that ends the statement.
- *
- * The result is the length of the statement when it has no semicolon.
- */
-function endOfStatement(statement: string): number {
-  const semicolon = statement.indexOf(';');
-  return semicolon < 0 ? statement.length : semicolon;
-}
-
-/**
- * The offset just past the last item of a list.
- *
- * The list ends at the keyword that follows it, or at the semicolon that ends
- * the statement.
- */
-function endOfList(
-  keywords: Array<{ word: string; start: number; end: number }>,
-  fromEnd: number,
-  statement: string
-): number {
-  for (const keyword of keywords) {
-    if (keyword.start < fromEnd) {
-      continue;
-    }
-    if (!FROM_END_KEYWORDS.has(keyword.word)) {
-      continue;
-    }
-    return keyword.start;
-  }
-  const semicolon = statement.indexOf(';', fromEnd);
-  return semicolon < 0 ? statement.length : semicolon;
-}
-
-/**
- * The columns of the CTE, one for each parameter.
- */
-function columnsOf(parameters: TransformParameter[], values: Record<string, string>): string {
+function columnsOf(
+  parameters: TransformParameter[],
+  values: Record<string, string>,
+  dialect: Dialect
+): string {
   return parameters
-    .map((parameter) => `${values[parameter.name]} AS ${quoteIdentifier(parameter.name)}`)
+    .map((parameter) => `${values[parameter.name]} AS ${quoteIdentifier(parameter.name, dialect)}`)
     .join(', ');
+}
+
+/**
+ * The parameters without a repeated name, in the order of their first use.
+ */
+function uniqueByName(parameters: TransformParameter[]): TransformParameter[] {
+  const seen = new Set<string>();
+  const unique: TransformParameter[] = [];
+  for (const parameter of parameters) {
+    if (seen.has(parameter.name)) {
+      continue;
+    }
+    seen.add(parameter.name);
+    unique.push(parameter);
+  }
+  return unique;
 }
 
 /**
  * The identifier of the parameter, quoted when it needs it.
  */
-function quoteIdentifier(name: string): string {
+function quoteIdentifier(name: string, dialect: Dialect): string {
   if (PLAIN_IDENTIFIER.test(name) && !RESERVED_WORDS.has(name)) {
     return name;
   }
-  return `"${name.replace(/"/g, '""')}"`;
+  const quote = dialect.placeholderStyle === 'mysql' ? '`' : '"';
+  return `${quote}${name.split(quote).join(quote + quote)}${quote}`;
 }
