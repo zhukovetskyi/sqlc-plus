@@ -86,14 +86,17 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "clean": "rm -rf out",
+    "compile": "npm run clean && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src && prettier --check .",
     "lint:fix": "eslint src --fix && prettier --write .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vscode-test"
+    "test": "ELECTRON_OZONE_PLATFORM_HINT=x11 xvfb-run -ae /dev/stdout ./node_modules/.bin/vscode-test",
+    "test:visible": "./node_modules/.bin/vscode-test",
+    "test:docker": "docker build -f Dockerfile.test -t sqlc-plus:test . && docker run --rm --shm-size=1g -v \"$PWD\":/work -w /work sqlc-plus:test npm test"
   },
   "devDependencies": {
     "@types/vscode": "^1.140.0",
