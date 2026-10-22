@@ -1,0 +1,22 @@
+FROM node:24-bookworm-slim
+
+# The shared libraries that VS Code loads when the test runner starts the
+# Extension Development Host under a virtual display.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    xvfb \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    libgbm1 \
+    libasound2 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libdrm2 \
+    libxkbcommon0 \
+  && rm -rf /var/lib/apt/lists/*
+
+CMD ["npm", "test"]
