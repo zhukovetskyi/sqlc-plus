@@ -20,7 +20,7 @@
     "url": "https://github.com/zhukovetskyi/sqlc-plus.git"
   },
   "license": "GPL-3.0",
-  "publisher": "Zhukovetskyi",
+  "publisher": "zhukovetskyi",
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
