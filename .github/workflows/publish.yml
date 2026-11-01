@@ -19,4 +19,4 @@ jobs:
         with:
           node-version: 26
       - run: npm ci
-      - run: npx @vscode/vsce publish --oidc --publisher Zhukovetskyi
+      - run: npx @vscode/vsce publish --oidc
