@@ -1,0 +1,117 @@
+{
+  "name": "sqlc-plus",
+  "displayName": "sqlc-plus",
+  "description": "Convert sqlc queries into executable parameterized SQL, copied to clipboard",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.140.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "sqlc",
+    "sql",
+    "postgresql",
+    "query"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhukovetskyi/sqlc-plus.git"
+  },
+  "license": "GPL-3.0",
+  "publisher": "zhukovetskyi",
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sqlc-plus.convert",
+        "title": "Copy sqlc Query as Executable SQL",
+        "category": "sqlc"
+      },
+      {
+        "command": "sqlc-plus.convertWithValues",
+        "title": "Copy sqlc Query as Executable SQL with Values",
+        "category": "sqlc"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "sqlc-plus.convert",
+          "when": "editorLangId == 'sql'",
+          "group": "navigation"
+        },
+        {
+          "command": "sqlc-plus.convertWithValues",
+          "when": "editorLangId == 'sql'",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sqlc-plus.convert",
+          "when": "editorLangId == 'sql'"
+        },
+        {
+          "command": "sqlc-plus.convertWithValues",
+          "when": "editorLangId == 'sql'"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "sqlc-plus",
+      "properties": {
+        "sqlc-plus.placeholderStyle": {
+          "type": "string",
+          "enum": [
+            "postgres",
+            "mysql",
+            "sqlite"
+          ],
+          "default": "postgres",
+          "description": "The placeholder syntax of the database the queries are written for."
+        },
+        "sqlc-plus.parameterValues": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "The value of each parameter, by parameter name. Each value is a SQL literal, so write the quotes yourself: `\"id\": \"'111'\"`. The command that writes the values in a CTE uses this setting."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "clean": "rm -rf out",
+    "compile": "npm run clean && tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src && prettier --check .",
+    "lint:fix": "eslint src --fix && prettier --write .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "ELECTRON_OZONE_PLATFORM_HINT=x11 xvfb-run -ae /dev/stdout ./node_modules/.bin/vscode-test",
+    "test:visible": "./node_modules/.bin/vscode-test",
+    "test:docker": "docker build -f Dockerfile.test -t sqlc-plus:test . && docker run --rm --shm-size=1g -v \"$PWD\":/work -w /work sqlc-plus:test npm test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.140.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^26.6.5",
+    "typescript-eslint": "^8.72.0",
+    "eslint": "^10.13.0",
+    "prettier": "^3.9.10",
+    "typescript": "^6.0.3",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0"
+  },
+  "overrides": {
+    "glob": "^13.0.6",
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6"
+  }
+}
