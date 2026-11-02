@@ -400,6 +400,43 @@ export class Scanner {
   }
 
   /**
+   * The span of the statement that holds the offset.
+   *
+   * The offset in the spaces before a statement selects the statement before
+   * it, so that the cursor past a semicolon keeps the statement that ends
+   * there. The result is undefined when the text is empty.
+   */
+  statementAt(offset: number): [number, number] | undefined {
+    const spans = this.statements();
+    if (this.text.length === 0) {
+      return undefined;
+    }
+    const cursor = Math.min(Math.max(offset, 0), this.text.length - 1);
+    for (let i = 0; i < spans.length; i++) {
+      const [start, end] = spans[i];
+      if (cursor < end) {
+        if (i > 0 && this.spacesBetween(start, cursor)) {
+          return spans[i - 1];
+        }
+        return spans[i];
+      }
+    }
+    return spans[spans.length - 1];
+  }
+
+  /**
+   * True when the text between the offsets holds spaces only.
+   */
+  private spacesBetween(start: number, end: number): boolean {
+    for (let i = start; i < end; i++) {
+      if (!isSpace(this.text[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
    * The offset of the ")" that closes the "(" at the offset.
    * The result is -1 when the parenthesis is not closed.
    */

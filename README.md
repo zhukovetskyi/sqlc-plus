@@ -13,7 +13,8 @@ Write queries with `sqlc` annotations, select them in the editor, run one comman
 - **`@name`** → the same as `sqlc.arg(name)`
 - **`sqlc.slice('name')`** → one placeholder for a list of values
 - **Strips sqlc metadata annotations** (e.g. `-- name: GetUserById :one`)
-- Works on the **current selection** or the **entire document**
+- Works on the **current selection**, or on the **statement at the cursor** when nothing is selected
+- **Clears the clipboard** when the copy fails, so a paste never holds an old query
 - Available via the **Command Palette** and the **editor right-click context menu**
 - The result matches the query that `sqlc` compiles: the parameters are numbered per statement, and a name that occurs twice uses one number
 - **Writes the values in a CTE**, so the query runs as it is, without binding parameters
@@ -44,10 +45,12 @@ The message of the command names the parameters to bind: `user_id`, `status`.
 ## Usage
 
 1. Open a file that holds `sqlc` queries.
-2. Select the query, or place the cursor in the file to convert the whole document.
+2. Select the query, or place the cursor in one query to convert only that query. With the cursor outside the selection, each copy takes the one statement that the cursor is in.
 3. Run **sqlc: Copy sqlc Query as Executable SQL** from the Command Palette or from the right-click menu.
 
 The converted query is in the clipboard. Paste it into your database client and bind the named parameters.
+
+When the copy fails, the clipboard is empty. The dialogs say so, so a paste cannot hold the query of an earlier copy.
 
 ## Values in a CTE
 
@@ -121,9 +124,20 @@ The project uses [Prettier](https://prettier.io) for the format. Run `npm run fo
 | `src/transformer.ts` | The conversion of a sqlc query into an executable query.          |
 | `src/cte.ts`         | The conversion that writes the values of the parameters in a CTE. |
 | `src/extension.ts`   | The VS Code commands, the clipboard and the messages.             |
+| `src/log.ts`         | The output channel that logs the attempts to copy.                |
 | `src/test/`          | The unit tests and the test of the commands.                      |
 
 The scanner, the transformer and the CTE do not use the `vscode` module, so they can be tested on their own.
+
+## Logging
+
+The command logs each attempt to copy in the Output panel:
+
+1. Open the Output panel with **View: Toggle Output** (`Ctrl+Shift+U`).
+2. Pick the channel **sqlc-plus** in the top right menu.
+3. Change the detail with the command **Developer: Set Log Level** for the channel. The level **Info** shows every copy, and the default level shows the errors and the warnings.
+
+A copy logs the number of the parameters, and a failure logs the reason. When a copy fails, the clipboard is empty, so a paste cannot hold the query of an earlier copy.
 
 ## Implementation Roadmap by Gemma4:31b
 

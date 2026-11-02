@@ -3,6 +3,7 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 
 import { COMMAND_ID, COMMAND_ID_WITH_VALUES } from '../extension';
+import { LOG_NAME, createLog } from '../log';
 
 const QUERY = [
   '-- name: GetUserById :one',
@@ -21,6 +22,19 @@ const EXPECTED = [
 
 const CTE_EXPECTED =
   "WITH params AS (SELECT '111' AS id, 'John Doe' AS name) SELECT u.* FROM users u WHERE u.id = (SELECT id FROM params) OR u.username = (SELECT name FROM params);";
+
+const MULTI = [
+  '-- name: GetUserById :one',
+  'SELECT sqlc.embed(users), sqlc.embed(profiles)',
+  'FROM users',
+  'JOIN profiles ON users.id = profiles.user_id',
+  "WHERE users.id = sqlc.arg('user_id') AND users.status = sqlc.narg('status');",
+  '',
+  '-- name: GetUserByName :one',
+  "SELECT u.* FROM users u WHERE u.id = sqlc.arg('id') OR u.username = sqlc.arg('name');",
+].join('\n');
+
+const SECOND_EXPECTED = 'SELECT u.* FROM users u WHERE u.id = $1 OR u.username = $2;';
 
 suite('extension', function () {
   this.timeout(20000);
@@ -99,8 +113,14 @@ suite('extension', function () {
     assert.strictEqual(await vscode.env.clipboard.readText(), CTE_EXPECTED);
   });
 
+  test('the log channel takes the name of the extension', () => {
+    const log = createLog();
+    assert.strictEqual(log.name, LOG_NAME);
+  });
+
   test('the command with values reports a parameter that has no value', async () => {
     const editor = await openQuery("SELECT * FROM users WHERE id = sqlc.arg('id');", true);
+    await vscode.env.clipboard.writeText('OLD');
 
     const result = await vscode.commands.executeCommand<{ sql: string }>(COMMAND_ID_WITH_VALUES, {
       editor,
@@ -109,6 +129,82 @@ suite('extension', function () {
     });
 
     assert.strictEqual(result, undefined);
+    assert.strictEqual(await vscode.env.clipboard.readText(), '');
+  });
+
+  test('the command copies the first statement when the cursor is in it', async () => {
+    const editor = await openQueryAt(MULTI, { line: 2, character: 0 });
+
+    const result = await vscode.commands.executeCommand<{ sql: string }>(COMMAND_ID, {
+      editor,
+      placeholderStyle: 'postgres',
+    });
+
+    assert.ok(result, 'the command returned no result');
+    assert.strictEqual(result.sql, EXPECTED);
+  });
+
+  test('the command copies the second statement when the cursor is in it', async () => {
+    const editor = await openQueryAt(MULTI, { line: 7, character: 0 });
+
+    const result = await vscode.commands.executeCommand<{ sql: string }>(COMMAND_ID, {
+      editor,
+      placeholderStyle: 'postgres',
+    });
+
+    assert.ok(result, 'the command returned no result');
+    assert.strictEqual(result.sql, SECOND_EXPECTED);
+  });
+
+  test('the command with values copies the statement at the cursor', async () => {
+    const editor = await openQueryAt(MULTI, { line: 7, character: 0 });
+
+    const result = await vscode.commands.executeCommand<{ sql: string }>(COMMAND_ID_WITH_VALUES, {
+      editor,
+      placeholderStyle: 'postgres',
+      parameterValues: { id: "'111'", name: "'John Doe'" },
+    });
+
+    assert.ok(result, 'the command returned no result');
+    assert.strictEqual(result.sql, CTE_EXPECTED);
+    assert.strictEqual(await vscode.env.clipboard.readText(), CTE_EXPECTED);
+  });
+
+  test('the command copies the statement before the spaces at its start', async () => {
+    const editor = await openQueryAt(MULTI, { line: 5, character: 0 });
+
+    const result = await vscode.commands.executeCommand<{ sql: string }>(COMMAND_ID, {
+      editor,
+      placeholderStyle: 'postgres',
+    });
+
+    assert.ok(result, 'the command returned no result');
+    assert.strictEqual(result.sql, EXPECTED);
+  });
+
+  test('the command copies the last statement at the end of the file', async () => {
+    const editor = await openQueryAt('SELECT 1;\n\nSELECT 2;', 'end');
+
+    const result = await vscode.commands.executeCommand<{ sql: string }>(COMMAND_ID, {
+      editor,
+      placeholderStyle: 'postgres',
+    });
+
+    assert.ok(result, 'the command returned no result');
+    assert.strictEqual(result.sql, 'SELECT 2;');
+  });
+
+  test('the command clears the clipboard when there is no statement', async () => {
+    const editor = await openQuery('', false);
+    await vscode.env.clipboard.writeText('OLD');
+
+    const result = await vscode.commands.executeCommand<{ sql: string }>(COMMAND_ID, {
+      editor,
+      placeholderStyle: 'postgres',
+    });
+
+    assert.strictEqual(result, undefined);
+    assert.strictEqual(await vscode.env.clipboard.readText(), '');
   });
 });
 
@@ -124,5 +220,24 @@ async function openQuery(content: string, selectAll: boolean): Promise<vscode.Te
   editor.selection = selectAll
     ? new vscode.Selection(0, 0, 0, end)
     : new vscode.Selection(0, 0, 0, 0);
+  return editor;
+}
+
+/**
+ * Opens a query in an editor with the cursor in it.
+ *
+ * The cursor is at the end of the document when the position is not.
+ */
+async function openQueryAt(
+  content: string,
+  at: { line: number; character: number } | 'end'
+): Promise<vscode.TextEditor> {
+  const document = await vscode.workspace.openTextDocument({ content, language: 'sql' });
+  const editor = await vscode.window.showTextDocument(document);
+  const position =
+    at === 'end'
+      ? document.positionAt(document.getText().length)
+      : new vscode.Position(at.line, at.character);
+  editor.selection = new vscode.Selection(position, position);
   return editor;
 }
