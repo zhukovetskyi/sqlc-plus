@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 
 import { CteResult, transformSqlcQueryWithValues } from './cte';
+import { Log, createLog } from './log';
 import { PlaceholderStyle, TransformResult, transformSqlcQuery } from './transformer';
+import { Scanner, postgresDialect } from './sql-lexer';
 
 export const COMMAND_ID = 'sqlc-plus.convert';
 export const COMMAND_ID_WITH_VALUES = 'sqlc-plus.convertWithValues';
@@ -17,14 +19,15 @@ export interface ConvertOptions {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  const log = createLog();
   const convert = vscode.commands.registerCommand(COMMAND_ID, (options?: ConvertOptions) =>
-    convertActiveQuery(options)
+    convertActiveQuery(options, log)
   );
   const convertWithValues = vscode.commands.registerCommand(
     COMMAND_ID_WITH_VALUES,
-    (options?: ConvertOptions) => convertActiveQueryWithValues(options)
+    (options?: ConvertOptions) => convertActiveQueryWithValues(options, log)
   );
-  context.subscriptions.push(convert, convertWithValues);
+  context.subscriptions.push(log, convert, convertWithValues);
 }
 
 export function deactivate(): void {}
@@ -44,60 +47,92 @@ function editorOf(options?: ConvertOptions): vscode.TextEditor | undefined {
 /**
  * The query of the editor.
  *
- * The result is the selection of the editor, or the whole document when the
- * selection is empty.
+ * The result is the selection of the editor, or the statement at the cursor
+ * when the selection is empty. The statement is one query of the document,
+ * with its comments, so the command does not copy the other statements.
  */
 function queryOf(editor: vscode.TextEditor): string {
   const selection = editor.selection;
-  return selection.isEmpty ? editor.document.getText() : editor.document.getText(selection);
+  if (!selection.isEmpty) {
+    return editor.document.getText(selection);
+  }
+  const scanner = new Scanner(editor.document.getText(), postgresDialect);
+  const span = scanner.statementAt(editor.document.offsetAt(selection.active));
+  if (!span) {
+    return '';
+  }
+  const start = editor.document.positionAt(span[0]);
+  const end = editor.document.positionAt(span[1]);
+  return editor.document.getText(new vscode.Range(start, end)).trim();
 }
 
 /**
- * Converts the query of the active editor and copies the result to the
- * clipboard.
+ * The clearing of the clipboard after a failed attempt to copy, with the
+ * report in the log and in a dialog.
+ *
+ * The result is always undefined for the command to return.
  */
-async function convertActiveQuery(options?: ConvertOptions): Promise<TransformResult | undefined> {
+async function failCopy(log: Log, level: 'warn' | 'error', detail: string): Promise<undefined> {
+  await vscode.env.clipboard.writeText('');
+  log[level](`sqlc-plus: ${detail}`);
+  log.info('sqlc-plus: the clipboard is cleared.');
+  const dialog = `sqlc-plus: ${detail} The clipboard is empty.`;
+  if (level === 'warn') {
+    vscode.window.showWarningMessage(dialog);
+  } else {
+    vscode.window.showErrorMessage(dialog);
+  }
+  return undefined;
+}
+
+/**
+ * Converts the statement at the cursor of the active editor and copies the
+ * result to the clipboard.
+ */
+async function convertActiveQuery(
+  options?: ConvertOptions,
+  log: Log = createLog()
+): Promise<TransformResult | undefined> {
   const active = editorOf(options);
   if (!active) {
-    vscode.window.showErrorMessage('sqlc-plus: no active editor found.');
-    return undefined;
+    return failCopy(log, 'error', 'no active editor found.');
   }
 
   const text = queryOf(active);
   if (text.trim() === '') {
-    vscode.window.showWarningMessage('sqlc-plus: the query is empty.');
-    return undefined;
+    return failCopy(log, 'warn', 'the query is empty.');
   }
 
   const style = options?.placeholderStyle ?? placeholderStyle();
   const result = transformSqlcQuery(text, { placeholderStyle: style });
   if (result.sql === '') {
-    vscode.window.showWarningMessage('sqlc-plus: the query is empty.');
-    return undefined;
+    return failCopy(log, 'warn', 'the query is empty.');
   }
 
   await vscode.env.clipboard.writeText(result.sql);
+  log.info(
+    `sqlc-plus: copied the query to the clipboard. Parameters: ${result.parameters.length}.`
+  );
   vscode.window.showInformationMessage(message(result));
   return result;
 }
 
 /**
- * Converts the query of the active editor, with the values of the parameters
- * written in a CTE, and copies the result to the clipboard.
+ * Converts the statement at the cursor of the active editor, with the values
+ * of the parameters written in a CTE, and copies the result to the clipboard.
  */
 async function convertActiveQueryWithValues(
-  options?: ConvertOptions
+  options?: ConvertOptions,
+  log: Log = createLog()
 ): Promise<CteResult | undefined> {
   const active = editorOf(options);
   if (!active) {
-    vscode.window.showErrorMessage('sqlc-plus: no active editor found.');
-    return undefined;
+    return failCopy(log, 'error', 'no active editor found.');
   }
 
   const text = queryOf(active);
   if (text.trim() === '') {
-    vscode.window.showWarningMessage('sqlc-plus: the query is empty.');
-    return undefined;
+    return failCopy(log, 'warn', 'the query is empty.');
   }
 
   let result: CteResult;
@@ -106,16 +141,17 @@ async function convertActiveQueryWithValues(
     const values = options?.parameterValues ?? parameterValues();
     result = transformSqlcQueryWithValues(text, values, { placeholderStyle: style });
   } catch (error) {
-    vscode.window.showErrorMessage(`sqlc-plus: ${messageOf(error)}`);
-    return undefined;
+    return failCopy(log, 'error', messageOf(error));
   }
 
   if (result.sql === '') {
-    vscode.window.showWarningMessage('sqlc-plus: the query is empty.');
-    return undefined;
+    return failCopy(log, 'warn', 'the query is empty.');
   }
 
   await vscode.env.clipboard.writeText(result.sql);
+  log.info(
+    `sqlc-plus: copied the query with values to the clipboard. Parameters: ${result.parameters.length}.`
+  );
   vscode.window.showInformationMessage(message(result));
   return result;
 }
