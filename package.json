@@ -2,7 +2,7 @@
   "name": "sqlc-plus",
   "displayName": "sqlc-plus",
   "description": "Convert sqlc queries into executable parameterized SQL, copied to clipboard",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "engines": {
     "vscode": "^1.140.0"
   },
